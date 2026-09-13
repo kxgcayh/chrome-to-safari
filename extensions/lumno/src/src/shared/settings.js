@@ -30,6 +30,10 @@
   const FAVICON_ENHANCED_FETCH_ENABLED_STORAGE_KEY = '_x_extension_favicon_enhanced_fetch_enabled_2026_unique_';
   const SEARCH_RESULT_DISPLAY_LIMIT_STORAGE_KEY = '_x_extension_search_result_display_limit_2026_unique_';
   const OVERLAY_OPEN_TABS_DEFAULT_VISIBLE_STORAGE_KEY = '_x_extension_overlay_open_tabs_default_visible_2026_unique_';
+  const OVERLAY_TAB_KEYWORD_STORAGE_KEY = '_x_extension_overlay_tab_keyword_2026_unique_';
+  const OVERLAY_HISTORY_KEYWORD_STORAGE_KEY = '_x_extension_overlay_history_keyword_2026_unique_';
+  const OVERLAY_TAB_KEYWORD_DEFAULT = 'tb';
+  const OVERLAY_HISTORY_KEYWORD_DEFAULT = 'hy';
   const OVERLAY_ENTER_ANIMATION_STORAGE_KEY = '_x_extension_overlay_enter_animation_2026_unique_';
   const OVERLAY_PAGE_THEME_ADAPTATION_ENABLED_STORAGE_KEY = '_x_extension_overlay_page_theme_adaptation_enabled_2026_unique_';
   const SELECTION_QUICK_ACTIONS_ENABLED_STORAGE_KEY = '_x_extension_selection_quick_actions_enabled_2026_unique_';
@@ -104,7 +108,9 @@
     '_x_extension_search_blacklist_2026_unique_',
     '_x_extension_favicon_request_blacklist_2026_unique_',
     '_x_extension_favicon_enhanced_fetch_enabled_2026_unique_',
-    '_x_extension_default_search_engine_2024_unique_'
+    '_x_extension_default_search_engine_2024_unique_',
+    '_x_extension_overlay_tab_keyword_2026_unique_',
+    '_x_extension_overlay_history_keyword_2026_unique_'
   ]);
   const SELECTION_QUICK_ACTIONS_PROVIDER_KEYS = Object.freeze([
     'gpt',
@@ -302,6 +308,26 @@
 
   function normalizeOverlayOpenTabsDefaultVisible(value) {
     return value !== false;
+  }
+
+  function normalizeOverlayTabKeyword(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) {
+      return OVERLAY_TAB_KEYWORD_DEFAULT;
+    }
+    // Allow alphanumeric characters only, max 10 chars
+    const cleaned = raw.replace(/[^a-z0-9]/g, '').slice(0, 10);
+    return cleaned || OVERLAY_TAB_KEYWORD_DEFAULT;
+  }
+
+  function normalizeOverlayHistoryKeyword(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) {
+      return OVERLAY_HISTORY_KEYWORD_DEFAULT;
+    }
+    // Allow alphanumeric characters only, max 10 chars
+    const cleaned = raw.replace(/[^a-z0-9]/g, '').slice(0, 10);
+    return cleaned || OVERLAY_HISTORY_KEYWORD_DEFAULT;
   }
 
   function normalizeOverlayPageThemeAdaptationEnabled(value) {
@@ -658,6 +684,10 @@
     FAVICON_ENHANCED_FETCH_ENABLED_STORAGE_KEY,
     SEARCH_RESULT_DISPLAY_LIMIT_STORAGE_KEY,
     OVERLAY_OPEN_TABS_DEFAULT_VISIBLE_STORAGE_KEY,
+    OVERLAY_TAB_KEYWORD_STORAGE_KEY,
+    OVERLAY_HISTORY_KEYWORD_STORAGE_KEY,
+    OVERLAY_TAB_KEYWORD_DEFAULT,
+    OVERLAY_HISTORY_KEYWORD_DEFAULT,
     OVERLAY_ENTER_ANIMATION_STORAGE_KEY,
     OVERLAY_PAGE_THEME_ADAPTATION_ENABLED_STORAGE_KEY,
     SELECTION_QUICK_ACTIONS_ENABLED_STORAGE_KEY,
@@ -701,6 +731,8 @@
     shouldSkipEntryMotion,
     normalizeFaviconEnhancedFetchEnabled,
     normalizeOverlayOpenTabsDefaultVisible,
+    normalizeOverlayTabKeyword,
+    normalizeOverlayHistoryKeyword,
     normalizeOverlayPageThemeAdaptationEnabled,
     normalizeOverlaySizeMode,
     normalizeOverlayEnterAnimation,

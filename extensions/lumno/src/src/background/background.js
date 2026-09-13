@@ -7054,6 +7054,14 @@ function handleSearchMessage(request, sender, sendResponse) {
       });
       return true; // Keep the message channel open for async response
     }
+    case 'getRecentHistory': {
+      getRecentHistorySuggestions(request.limit).then(suggestions => {
+        sendResponse({ suggestions: suggestions });
+      }).catch(() => {
+        sendResponse({ suggestions: [] });
+      });
+      return true; // Keep the message channel open for async response
+    }
     case 'getSearchEngineSuggestions': {
       const query = request.query;
       const requestKey = getSearchEngineSuggestionRequestKey(request, sender);
@@ -9972,6 +9980,50 @@ function safeHistorySearch(opts) {
     return LumnoHistory.search(opts).catch(() => []);
   }
   return Promise.resolve([]);
+}
+
+// Recent history for the overlay's empty-query history scope. chrome.history
+// text search requires a non-empty query path to be useful, so scoped empty
+// queries go through this dedicated recent-items action instead.
+async function getRecentHistorySuggestions(limit) {
+  const maxResults = Number(limit) > 0
+    ? Math.min(50, Math.floor(Number(limit)))
+    : 20;
+  const [historyItems, searchBlacklistItems] = await Promise.all([
+    safeHistorySearch({ text: '', maxResults: Math.max(120, maxResults * 4) }),
+    loadSearchBlacklistItems()
+  ]);
+  const suggestions = [];
+  const seenUrls = new Set();
+  const items = (Array.isArray(historyItems) ? historyItems : [])
+    .slice()
+    .sort((a, b) => (Number(b && b.lastVisitTime) || 0) - (Number(a && a.lastVisitTime) || 0));
+  for (const item of items) {
+    if (!item || !item.url || !item.title || seenUrls.has(item.url)) {
+      continue;
+    }
+    if (isSearchEngineResultUrl(item.url) || isOwnExtensionUrl(item.url)) {
+      continue;
+    }
+    if (isUrlBlockedBySearchBlacklist(item.url, searchBlacklistItems)) {
+      continue;
+    }
+    seenUrls.add(item.url);
+    suggestions.push({
+      type: 'history',
+      title: item.title,
+      url: item.url,
+      favicon: getPageFaviconCandidateUrl(item.url),
+      score: 0,
+      lastVisitTime: Number(item.lastVisitTime) || 0,
+      visitCount: Number(item.visitCount) || 0,
+      reasons: []
+    });
+    if (suggestions.length >= maxResults) {
+      break;
+    }
+  }
+  return suggestions;
 }
 
 function safeHistoryDeleteUrl(targetUrl) {

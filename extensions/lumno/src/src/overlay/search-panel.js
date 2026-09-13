@@ -17,6 +17,7 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
   let clickOutsideHandler = null;
   let overlayScrollPauseHandler = null;
   let overlayWheelIsolationHandler = null;
+  let overlayFocusKeeperStop = null;
   let overlayRevealGate = null;
   let overlayUpdateNoticeController = null;
   let overlayEngagementNoticeController = null;
@@ -288,6 +289,10 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
   const FAVICON_REQUEST_BLACKLIST_STORAGE_KEY = overlayStorageKeys.faviconRequestBlacklist;
   const FAVICON_ENHANCED_FETCH_ENABLED_STORAGE_KEY = overlayStorageKeys.faviconEnhancedFetchEnabled;
   const OVERLAY_OPEN_TABS_DEFAULT_VISIBLE_STORAGE_KEY = overlayStorageKeys.overlayOpenTabsDefaultVisible;
+  const OVERLAY_TAB_KEYWORD_STORAGE_KEY = overlayStorageKeys.overlayTabKeyword ||
+    '_x_extension_overlay_tab_keyword_2026_unique_';
+  const OVERLAY_HISTORY_KEYWORD_STORAGE_KEY = overlayStorageKeys.overlayHistoryKeyword ||
+    '_x_extension_overlay_history_keyword_2026_unique_';
   const OVERLAY_SIZE_MODE_STORAGE_KEY = overlayStorageKeys.overlaySizeMode;
   const OVERLAY_ENTER_ANIMATION_STORAGE_KEY = overlayStorageKeys.overlayEnterAnimation ||
     '_x_extension_overlay_enter_animation_2026_unique_';
@@ -357,6 +362,7 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
   let overlayOpenTabsDefaultVisible = true;
   let overlayOpenTabsDefaultVisibleLoaded = !storageArea;
   let initialOverlayOpenTabsDefaultVisibleReady = Promise.resolve();
+  let overlayTabTriggers = { openTabs: 'tb', history: 'hy' };
   let documentPipEnabled = Boolean(normalizedOverlayContext.documentPipEnabled);
   let overlayThemeListenerAttached = false;
   let numberShortcutInstantEnabled = false;
@@ -376,7 +382,9 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
       SEARCH_RESULT_DISPLAY_LIMIT_STORAGE_KEY,
       OVERLAY_OPEN_TABS_DEFAULT_VISIBLE_STORAGE_KEY,
       NUMBER_SHORTCUT_INSTANT_ENABLED_STORAGE_KEY,
-      MACOS_CTRL_SUGGESTION_NAVIGATION_ENABLED_STORAGE_KEY
+      MACOS_CTRL_SUGGESTION_NAVIGATION_ENABLED_STORAGE_KEY,
+      OVERLAY_TAB_KEYWORD_STORAGE_KEY,
+      OVERLAY_HISTORY_KEYWORD_STORAGE_KEY
     ]
   ).catch(() => ({}));
   const initialOverlayEnterAnimationReady = initialOverlaySettingsReady.then((result) => {
@@ -421,6 +429,15 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
         ? SETTINGS.normalizeMacosCtrlSuggestionNavigationEnabled(rawValue)
         : rawValue === true;
     return macosCtrlSuggestionNavigationEnabled;
+  });
+  const initialCustomKeywordsReady = initialOverlaySettingsReady.then((result) => {
+    customTabKeyword = typeof SETTINGS.normalizeOverlayTabKeyword === 'function'
+      ? SETTINGS.normalizeOverlayTabKeyword(result[OVERLAY_TAB_KEYWORD_STORAGE_KEY])
+      : (result[OVERLAY_TAB_KEYWORD_STORAGE_KEY] || 'tb');
+    customHistoryKeyword = typeof SETTINGS.normalizeOverlayHistoryKeyword === 'function'
+      ? SETTINGS.normalizeOverlayHistoryKeyword(result[OVERLAY_HISTORY_KEYWORD_STORAGE_KEY])
+      : (result[OVERLAY_HISTORY_KEYWORD_STORAGE_KEY] || 'hy');
+    return { tabKeyword: customTabKeyword, historyKeyword: customHistoryKeyword };
   });
 
   function normalizeOverlaySearchBlacklistItems(items) {
@@ -771,6 +788,19 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
     return typeof SETTINGS.normalizeOverlayEnterAnimation === 'function'
       ? SETTINGS.normalizeOverlayEnterAnimation(mode)
       : (mode === 'fade' ? 'fade' : 'elastic');
+  }
+
+  function normalizeOverlayTabTriggers(value) {
+    const defaults = { openTabs: 'tb', history: 'hy' };
+    const raw = value && typeof value === 'object' ? value : {};
+    const normalized = {};
+    Object.keys(defaults).forEach((triggerId) => {
+      const keyword = String(raw[triggerId] != null ? raw[triggerId] : defaults[triggerId])
+        .trim()
+        .replace(/\s+/g, '');
+      normalized[triggerId] = keyword.toLowerCase();
+    });
+    return normalized;
   }
 
   function shouldSkipOverlayEntryMotion() {
@@ -1495,6 +1525,18 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
     return Boolean(root && root.activeElement === input);
   }
 
+  function focusExistingOverlayInput(overlayElement) {
+    if (!overlayElement || typeof overlayElement.querySelector !== 'function' ||
+        window._x_extension_search_overlay_open_2026_unique_ !== true) {
+      return;
+    }
+    const existingInput =
+      overlayElement.querySelector('#_x_extension_search_input_2024_unique_');
+    if (existingInput && typeof existingInput.focus === 'function') {
+      existingInput.focus({ preventScroll: true });
+    }
+  }
+
   function notifyOverlayLoadingSession(input) {
     if (suppressOverlayLoadingSessionNotification || !loadingSessionTrackingActive || !input ||
         !chrome || !chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') {
@@ -1560,6 +1602,10 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
     stopOverlayUpdateNoticeFrameSync();
     clearOverlayUpdateNoticeMountTimer();
     stopOverlayAntiTranslateObserver();
+    if (overlayFocusKeeperStop) {
+      overlayFocusKeeperStop();
+      overlayFocusKeeperStop = null;
+    }
     if (overlayElement) {
       if (overlayWheelIsolationHandler) {
         overlayElement.removeEventListener('wheel', overlayWheelIsolationHandler, true);
@@ -1751,6 +1797,7 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
     shouldReplaceExistingOverlay = shouldReplaceStaleOverlay;
     if (ensureOverlayOpen && !shouldReplaceStaleOverlay) {
       window._x_extension_search_overlay_open_2026_unique_ = true;
+      focusExistingOverlayInput(overlay);
       return;
     }
     removeOverlay(overlay, {
@@ -1819,6 +1866,8 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
     let enabledSearchResultSourceTypes = ['topSite', 'bookmark', 'history'];
     let openTabsSearchModeActive = false;
     let pendingOpenTabsPrefixEntryTimer = 0;
+    let customTabKeyword = 'tb';
+    let customHistoryKeyword = 'hy';
     const imeKeyGuard = LumnoImeKeyGuard.createImeKeyGuard();
     let selectedIndex = -1; // -1 means input is focused, 0+ means suggestion is selected
     const suggestionItems = [];
@@ -4119,6 +4168,24 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
       } else {
         clearDefaultOpenTabsSuggestions();
       }
+    });
+    storageChangeListeners.add((changes, areaName) => {
+      if (!isPrimaryStorageAreaName(areaName) || !changes[OVERLAY_TAB_KEYWORD_STORAGE_KEY]) {
+        return;
+      }
+      const rawValue = changes[OVERLAY_TAB_KEYWORD_STORAGE_KEY].newValue;
+      customTabKeyword = typeof SETTINGS.normalizeOverlayTabKeyword === 'function'
+        ? SETTINGS.normalizeOverlayTabKeyword(rawValue)
+        : (rawValue || 'tb');
+    });
+    storageChangeListeners.add((changes, areaName) => {
+      if (!isPrimaryStorageAreaName(areaName) || !changes[OVERLAY_HISTORY_KEYWORD_STORAGE_KEY]) {
+        return;
+      }
+      const rawValue = changes[OVERLAY_HISTORY_KEYWORD_STORAGE_KEY].newValue;
+      customHistoryKeyword = typeof SETTINGS.normalizeOverlayHistoryKeyword === 'function'
+        ? SETTINGS.normalizeOverlayHistoryKeyword(rawValue)
+        : (rawValue || 'hy');
     });
     if (storageArea) {
       storageArea.get([DOCUMENT_PIP_ENABLED_STORAGE_KEY], (result) => {
@@ -6586,6 +6653,29 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
         e.preventDefault();
         return activateLocalSearchScope(localSearchScopeTriggerState.scope);
       }
+      // Custom keyword triggers for tabs and history
+      if (triggerInput) {
+        const normalizedInput = triggerInput.toLowerCase();
+        if (normalizedInput === customTabKeyword) {
+          e.preventDefault();
+          activateOpenTabsSearchMode({
+            deferResults: false,
+            preserveResults: false
+          });
+          searchInput.value = '';
+          latestRawInputValue = '';
+          latestOverlayQuery = '';
+          return true;
+        }
+        if (normalizedInput === customHistoryKeyword) {
+          e.preventDefault();
+          activateLocalSearchScope({ sourceType: 'history' }, { preserveResults: false });
+          searchInput.value = '';
+          latestRawInputValue = '';
+          latestOverlayQuery = '';
+          return true;
+        }
+      }
       if (triggerInput) {
         e.preventDefault();
         const providers = (siteSearchProvidersCache && siteSearchProvidersCache.length > 0)
@@ -8316,6 +8406,74 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
       }, Math.max(0, Number(delayMs) || 0));
     }
 
+    // The host page can steal focus back after the overlay opens (autofocus,
+    // SPA re-renders, late focus() calls), leaving the command bar inert
+    // until it is clicked. While the overlay is open, pull focus back to the
+    // input whenever it escapes the overlay mount.
+    function isFocusInsideOverlayPanel(target) {
+      if (!target || target.nodeType !== 1) {
+        return false;
+      }
+      if (target === overlay) {
+        return true;
+      }
+      if (overlay.contains(target)) {
+        return true;
+      }
+      const mountHost = getOverlayMountHost(overlay);
+      return Boolean(mountHost &&
+        (target === mountHost || mountHost.contains(target)));
+    }
+
+    function reclaimOverlayInputFocus() {
+      if (!overlay || !overlay.isConnected ||
+          window._x_extension_search_overlay_open_2026_unique_ !== true) {
+        return;
+      }
+      // Focus inside the closed shadow mount reports the mount host as the
+      // document-level active element.
+      if (isFocusInsideOverlayPanel(document.activeElement)) {
+        return;
+      }
+      const searchRoot = searchInput && typeof searchInput.getRootNode === 'function'
+        ? searchInput.getRootNode()
+        : null;
+      if (searchRoot && searchRoot.activeElement) {
+        return;
+      }
+      if (searchInput && searchInput.isConnected &&
+          typeof searchInput.focus === 'function') {
+        searchInput.focus({ preventScroll: true });
+      }
+    }
+
+    function startOverlayFocusKeeper() {
+      if (overlayFocusKeeperStop) {
+        return;
+      }
+      const focusinHandler = (event) => {
+        if (event && isFocusInsideOverlayPanel(event.target)) {
+          return;
+        }
+        reclaimOverlayInputFocus();
+      };
+      const focusoutHandler = () => {
+        // Covers focus targets that never surface as document focusin, such
+        // as an iframe taking focus; the delayed check re-verifies the
+        // outcome instead of trusting relatedTarget retargeting.
+        setTimeout(reclaimOverlayInputFocus, 0);
+      };
+      document.addEventListener('focusin', focusinHandler, true);
+      document.addEventListener('focusout', focusoutHandler, true);
+      const retryTimers = [0, 60, 150, 320, 650].map((delayMs) =>
+        setTimeout(reclaimOverlayInputFocus, delayMs));
+      overlayFocusKeeperStop = () => {
+        retryTimers.forEach((timer) => clearTimeout(timer));
+        document.removeEventListener('focusin', focusinHandler, true);
+        document.removeEventListener('focusout', focusoutHandler, true);
+      };
+    }
+
     function focusOverlayInputForReveal() {
       if (!searchInput || !searchInput.isConnected ||
           typeof searchInput.focus !== 'function') {
@@ -8325,6 +8483,7 @@ window._x_extension_toggleSearchOverlay_2026_unique_ = function(tabs, overlayCon
         return;
       }
       searchInput.focus({ preventScroll: true });
+      startOverlayFocusKeeper();
     }
 
     const initialOverlayContentReady = Promise.all([

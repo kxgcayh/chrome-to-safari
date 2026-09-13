@@ -196,6 +196,24 @@
   "settings_overlay_open_tabs_default_visible_title": {
     "message": "Show all open tabs by default when Lumno opens on a webpage"
   },
+  "settings_overlay_tab_keyword_title": {
+    "message": "Tab trigger keyword (Open Tabs)"
+  },
+  "settings_overlay_tab_keyword_desc": {
+    "message": "Type keyword then press Tab to quickly switch to tab search mode"
+  },
+  "settings_overlay_tab_keyword_placeholder": {
+    "message": "tb"
+  },
+  "settings_overlay_history_keyword_title": {
+    "message": "Tab trigger keyword (History)"
+  },
+  "settings_overlay_history_keyword_desc": {
+    "message": "Type keyword then press Tab to quickly switch to history search mode"
+  },
+  "settings_overlay_history_keyword_placeholder": {
+    "message": "hy"
+  },
   "settings_favicon_enhanced_fetch_title": {
     "message": "Enhanced Icon and Theme Color Fetching"
   },

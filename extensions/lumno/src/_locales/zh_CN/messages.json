@@ -196,6 +196,24 @@
   "settings_overlay_open_tabs_default_visible_title": {
     "message": "在网页唤起时，默认展示所有已打开标签页"
   },
+  "settings_overlay_tab_keyword_title": {
+    "message": "Tab 触发关键词（已打开标签页）"
+  },
+  "settings_overlay_tab_keyword_desc": {
+    "message": "输入关键词后按 Tab 键，快速切换到标签页搜索模式"
+  },
+  "settings_overlay_tab_keyword_placeholder": {
+    "message": "tb"
+  },
+  "settings_overlay_history_keyword_title": {
+    "message": "Tab 触发关键词（历史记录）"
+  },
+  "settings_overlay_history_keyword_desc": {
+    "message": "输入关键词后按 Tab 键，快速切换到历史记录搜索模式"
+  },
+  "settings_overlay_history_keyword_placeholder": {
+    "message": "hy"
+  },
   "settings_favicon_enhanced_fetch_title": {
     "message": "增强图标与主题色获取"
   },
