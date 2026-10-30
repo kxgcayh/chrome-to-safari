@@ -51,8 +51,6 @@ final class Runner: ObservableObject {
     @Published var succeeded = false
     @Published var lastVerb = ""
 
-    private var process: Process?
-
     func run(arguments: [String], env: [String: String] = [:]) {
         steps = []
         log = ""
@@ -75,11 +73,13 @@ final class Runner: ObservableObject {
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            guard !data.isEmpty else { return }
+            let text = String(decoding: data, as: UTF8.self)
             DispatchQueue.main.async { self?.append(text) }
         }
         proc.terminationHandler = { [weak self] p in
-            DispatchQueue.main.async {
+            // let the read handler deliver the last chunk (the error message) before closing
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 guard let self else { return }
                 pipe.fileHandleForReading.readabilityHandler = nil
                 for i in self.steps.indices { self.steps[i].done = true }
@@ -91,7 +91,6 @@ final class Runner: ObservableObject {
 
         do {
             try proc.run()
-            process = proc
         } catch {
             append("ERROR: could not run \(Self.scriptPath): \(error.localizedDescription)\n")
             running = false

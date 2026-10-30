@@ -30,6 +30,9 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_PATH="$REPO_ROOT/chrome-to-safari.sh"
 EXTENSIONS_DIR="${C2S_EXTENSIONS:-$REPO_ROOT/extensions}"
 
+C2S_TMP="$(mktemp -d)"   # all scratch files live here; removed on exit
+trap 'rm -rf "$C2S_TMP"' EXIT
+
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
 
 # --- helpers -------------------------------------------------------------------
@@ -39,6 +42,10 @@ info()     { echo "==> $*"; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 usage() { sed -n '2,27p' "$0"; }
+
+clean_app_name() { # the name ends up in filesystem paths under /Applications
+  printf '%s' "$1" | tr '/' '-' | sed 's/^\.*//'
+}
 
 slugify() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'
@@ -145,7 +152,7 @@ store_id_from_url() { # <store-url> -> echoes 32-char id (letters a-p)
 crx_fetch() { # <32-char-ext-id> -> echoes the extracted directory (chatter goes to stderr)
   local ext_id="$1"
   local dl_dir
-  dl_dir="$(mktemp -d)/${ext_id}"
+  dl_dir="$(mktemp -d "$C2S_TMP/crx.XXXXXX")/${ext_id}"
   mkdir -p "$dl_dir"
   info "Downloading $ext_id from Chrome Web Store..." >&2
   curl -fsSL -o "$dl_dir.crx" \
@@ -159,6 +166,10 @@ crx_fetch() { # <32-char-ext-id> -> echoes the extracted directory (chatter goes
 }
 
 # --- the build pipeline: sync -> convert -> build -> install --------------------
+
+replace_src() { # <extension-dir> <fresh-dir>: swap src/ for a new upstream copy
+  rm -rf "$1/src" && mkdir -p "$1/src" && cp -R "$2/." "$1/src/" || die "could not replace $1/src"
+}
 
 sync_staging() { # <slug>, <staging-dir>: src + safari overlay merged
   local dir="$EXTENSIONS_DIR/$1"
@@ -219,6 +230,7 @@ build_and_install_one() { # <slug> [--no-launch]
   app_name="$(json_field "$dir/meta.json" app_name)"
   bundle_id="$(json_field "$dir/meta.json" bundle_id)"
   [ -n "$app_name" ] || die "extensions/$slug/meta.json has no app_name"
+  case "$app_name" in */*|.*) die "extensions/$slug/meta.json: app_name must not contain '/' or start with '.'" ;; esac
 
   require_team_id
   echo "==> App name:  $app_name"
@@ -226,7 +238,7 @@ build_and_install_one() { # <slug> [--no-launch]
 
   # fresh converter input every time: src + safari overlay, nothing else
   local staging
-  staging="$(mktemp -d)/src"
+  staging="$C2S_TMP/staging-$slug/src"
   info "Syncing src/ (+ safari/ overlay) for $slug..."
   sync_staging "$slug" "$staging"
 
@@ -238,15 +250,16 @@ build_and_install_one() { # <slug> [--no-launch]
     --project-location "$dir/project" \
     --app-name "$app_name" \
     --bundle-identifier "$bundle_id" \
-    --macos-only --copy-resources --no-open --no-prompt --force
+    --macos-only --copy-resources --no-open --no-prompt --force \
+    || die "converter failed"
 
   local project="$dir/project/$app_name/$app_name.xcodeproj"
   [ -d "$project" ] || die "converter did not produce $project"
   normalize_bundle_ids "$project"
 
   local build_dir log_file
-  build_dir="$(mktemp -d)"
-  log_file="$(mktemp)"
+  build_dir="$C2S_TMP/build-$slug"
+  log_file="$C2S_TMP/build-$slug.log"
 
   info "Building..."
   # judge success by the product existing, not by grep's exit code
@@ -267,17 +280,21 @@ build_and_install_one() { # <slug> [--no-launch]
     echo "" >&2
     echo "ERROR: build failed. Last 40 lines of full output:" >&2
     tail -40 "$log_file" >&2
-    die "see above for the real error (full log: $log_file)"
+    die "build failed — see the output above"
   fi
 
   info "Verifying signature..."
-  codesign --verify --deep --strict "$app"
+  codesign --verify --deep --strict "$app" || die "signature check failed — not installing"
 
   info "Installing to /Applications..."
+  # copy first, then swap, so a failed copy never leaves you without the old app
+  local staged_app="/Applications/.$app_name.new.app"
+  rm -rf "$staged_app"
+  mv "$app" "$staged_app" || { rm -rf "$staged_app"; die "could not copy the app to /Applications"; }
   rm -rf "/Applications/$app_name.app"
-  mv "$app" /Applications/
+  mv "$staged_app" "/Applications/$app_name.app" || die "could not move the app into place"
   "$LSREGISTER" -f -R -trusted "/Applications/$app_name.app" 2>/dev/null || true
-  rm -rf "$build_dir" "$log_file"
+  rm -rf "$build_dir"
 
   echo ""
   echo "Done: $slug is installed. Enable it in Safari > Settings > Extensions."
@@ -298,6 +315,30 @@ managed_slugs() { # every extensions/<dir> holding a meta.json, sorted
   done | sort
 }
 
+adopt_unmanaged() { # give meta.json (and the src/ layout) to extensions/<dir>/ folders dropped in by hand
+  local d slug name version tmp item
+  for d in "$EXTENSIONS_DIR"/*/; do
+    d="${d%/}"; slug="$(basename "$d")"
+    [ ! -f "$d/meta.json" ] || continue
+    if [ ! -f "$d/src/manifest.json" ]; then
+      [ -f "$d/manifest.json" ] || continue
+      # bare extension root: move everything under src/ (manifest paths stay relative, so they still resolve)
+      tmp="$d/.c2s-src"
+      mkdir "$tmp" || die "could not adopt extensions/$slug"
+      for item in "$d"/* "$d"/.[!.]*; do
+        [ -e "$item" ] && [ "$item" != "$tmp" ] && { mv "$item" "$tmp/" || die "could not move $item"; }
+      done
+      mv "$tmp" "$d/src" || die "could not adopt extensions/$slug"
+      info "Moved extensions/$slug into extensions/$slug/src"
+    fi
+    name="$(clean_app_name "$(manifest_name "$d/src/manifest.json")")"
+    [ -n "$name" ] || name="$(clean_app_name "$slug")"
+    version="$(manifest_field "$d/src/manifest.json" version)"
+    write_meta "$d/meta.json" "$slug" "$name" "com.converted.$(slugify "$slug")" local - - "${version:-0}"
+    info "Adopted extensions/$slug (wrote meta.json: $name, v${version:-0})"
+  done
+}
+
 resolve_slugs() { # <slug|all> -> slugs to operate on
   local want="${1:-all}"
   if [ "$want" = "all" ]; then
@@ -311,10 +352,8 @@ resolve_slugs() { # <slug|all> -> slugs to operate on
 # --- commands -------------------------------------------------------------------
 
 cmd_list() {
-  local slugs=()
   local IFS=$'\n'
-  # bash 3.2 + set -u: guard empty-array expansion
-  slugs=($(managed_slugs) ${slugs[@]+"${slugs[@]}"})
+  local slugs=($(managed_slugs))
   if [ ${#slugs[@]} -eq 0 ]; then
     echo "No extensions yet. Add one:"
     echo "  $0 add <chrome-web-store-url>"
@@ -390,6 +429,10 @@ cmd_add() {
   case "$name" in __MSG_*) name="$url_slug";; esac
   [ -n "$name" ] || name="$(basename "$source_dir")"
 
+  # the name ends up in filesystem paths under /Applications
+  name="$(clean_app_name "$name")"
+  [ -n "$name" ] || die "could not derive an app name — pass --name"
+
   slug="$(slugify "${C2S_SLUG:-$name}")"
   [ -n "$slug" ] || die "could not derive a slug from '$name' — pass --name"
   [ -e "$EXTENSIONS_DIR/$slug" ] && die "extensions/$slug already exists"
@@ -410,13 +453,13 @@ cmd_add() {
     "$( [ -n "$store_url" ] && echo store || echo local )" \
     "${store_url:--}" "${ext_id:--}" "${version:-0}"
 
-  # anchor commit: marks the pristine upstream so `update` can replay your
-  # future tweak-commits onto new upstream versions
+  # anchor commit: marks the pristine upstream so `update` can merge
+  # new upstream versions with your future tweak-commits
   if repo_is_git; then
     local rel
     rel="$(ext_rel_path "$slug")"
     git_run add "$rel"
-    if ! git_run commit -q -m "[c2s] $slug v${version:-0}"; then
+    if ! git_run commit -q -m "[c2s] $slug v${version:-0}" -- "$rel"; then
       info "WARNING: anchor commit failed — update's rebase needs it. Commit manually."
     fi
   fi
@@ -456,7 +499,7 @@ cmd_install() {
     any=1
     echo ""
     echo "### $slug"
-    build_and_install_one "$slug" "--no-launch" || { failed=1; continue; }
+    ( build_and_install_one "$slug" "--no-launch" ) || { failed=1; continue; }
   done < <(resolve_slugs all)
   [ "$any" -eq 1 ] || { echo "Nothing to install — no managed extensions yet."; return 0; }
   if [ "$failed" -eq 0 ] && [ -z "$no_launch" ]; then
@@ -480,7 +523,7 @@ cmd_update() {
   while IFS= read -r slug; do
     [ -n "$slug" ] || continue
     any=1
-    update_one "$slug" "$check" "$no_install" || failed=1
+    ( update_one "$slug" "$check" "$no_install" ) || failed=1
   done < <(resolve_slugs "$target")
   [ "$any" -eq 1 ] || { echo "Nothing to update — no managed extensions yet."; return 0; }
   [ "$failed" -eq 0 ] || die "one or more updates failed"
@@ -529,15 +572,13 @@ update_one() { # <slug> [--check] [--no-install]
   fi
 
   if ! repo_is_git; then
-    rm -rf "$dir/src"
-    mkdir -p "$dir/src"
-    cp -R "$fresh/." "$dir/src/"
+    replace_src "$dir" "$fresh"
     meta_set_version "$meta" "$remote_ver"
     echo "WARNING: not a git repo — replaced src/ directly; any edits were overwritten."
     return 0
   fi
 
-  local dirty rel
+  local dirty rel old_head cur_branch old_up tweaks new_up
   rel="$(ext_rel_path "$slug")"
   dirty="$(git_run status --porcelain -- "$rel" || true)"
   [ -n "$dirty" ] && die "'$slug' has uncommitted changes. Commit or stash them first, then re-run update."
@@ -546,60 +587,48 @@ update_one() { # <slug> [--check] [--no-install]
   cur_branch="$(git_run symbolic-ref --short -q HEAD || true)"
   old_up="$(git_run log --format=%H -E --grep='^\[c2s\]' -1 -- "$rel/src" || true)"
   if [ -z "$old_up" ]; then
-    die "no '[c2s]' anchor commit found for $slug/src — cannot rebase automatically.
+    die "no '[c2s]' anchor commit found for $slug/src — cannot merge automatically.
 Fix by hand: replace extensions/$slug/src with the new version and commit it."
   fi
 
-  tweaks="$(git_run rev-list --count "$old_up..$old_head" || echo 0)"
+  # only commits that touch this extension count; the farm holds other extensions too
+  tweaks="$(git_run rev-list --count --no-merges "$old_up..$old_head" -- "$rel" || echo 0)"
 
   if [ "$tweaks" -eq 0 ]; then
     # nobody tweaked this extension yet: just vendor the new upstream
-    rm -rf "$dir/src"
-    mkdir -p "$dir/src"
-    cp -R "$fresh/." "$dir/src/"
+    replace_src "$dir" "$fresh"
     meta_set_version "$meta" "$remote_ver"
-    git_run add "$rel/src" "$meta"
-    git_run commit -q -m "[c2s] $slug v$remote_ver"
-    echo "Vendored upstream $remote_ver (you had no local commits to replay)."
+    git_run add -A "$rel/src" "$meta"
+    git_run commit -q -m "[c2s] $slug v$remote_ver" -- "$rel/src" "$meta" || die "could not commit the new upstream"
+    echo "Vendored upstream $remote_ver (you had no local commits for it)."
   else
-    # Build the updated history beside the branch: new upstream commit on top
-    # of the anchor, then your tweak-commits cherry-picked onto it. The branch
-    # ref moves only if everything replays cleanly; until then,
-    # `git cherry-pick --abort` restores the exact pre-update state.
-    git_run checkout -q --detach "$old_up"
-    rm -rf "$dir/src"
-    mkdir -p "$dir/src"
-    cp -R "$fresh/." "$dir/src/"
+    # Commit the new upstream on top of the old anchor, then merge it into your
+    # branch. Git's 3-way merge keeps your tweaks and leaves every other
+    # extension's history alone.
+    git_run checkout -q --detach "$old_up" || die "could not check out the anchor commit — commit or stash your other changes, then re-run update."
+    replace_src "$dir" "$fresh"
     meta_set_version "$meta" "$remote_ver"
-    git_run add "$rel/src" "$meta"
-    git_run commit -q -m "[c2s] $slug v$remote_ver"
+    git_run add -A "$rel/src" "$meta"
+    git_run commit -q -m "[c2s] $slug v$remote_ver" -- "$rel/src" "$meta" || die "could not commit the new upstream (you are on a detached HEAD: git checkout ${cur_branch:-$old_head})"
+    new_up="$(git_run rev-parse HEAD)"
+    git_run checkout -q "${cur_branch:-$old_head}" || die "could not return to ${cur_branch:-$old_head}; the new upstream is commit $new_up"
 
-    echo "Replaying your $tweaks commit(s) onto upstream $remote_ver ..."
-    local pick_ok=1
-    git_run cherry-pick "$old_up..$old_head" || pick_ok=0
-    if [ "$pick_ok" -eq 0 ]; then
+    echo "Merging upstream $remote_ver into your $tweaks commit(s) ..."
+    if ! git_run merge --no-edit -m "Merge upstream $slug v$remote_ver" "$new_up"; then
       cat >&2 <<EOF
 
-Replay stopped on a conflict — your edits and the upstream change touch the
+Merge stopped on a conflict — your edits and the upstream change touch the
 same code. Resolve it in git terms:
   cd $REPO_ROOT
   git status                            # see conflicted files
   # edit files, then:
-  git add -A && git cherry-pick --continue
-When the replay finishes, move your branch onto it:
-  git checkout -B $cur_branch
-(or bail out entirely: git cherry-pick --abort)
+  git add -A && git commit --no-edit
+(or bail out entirely: git merge --abort)
 Then re-run: $0 install $slug
 EOF
       return 1
     fi
-
-    if [ -n "$cur_branch" ]; then
-      git_run checkout -q -B "$cur_branch"
-      echo "Rebase clean: your commits sit on top of upstream $remote_ver."
-    else
-      echo "Replayed cleanly (detached HEAD — attach a branch with: git checkout -B <name>)"
-    fi
+    echo "Merged: your commits sit alongside upstream $remote_ver."
   fi
 
   if [ -n "$no_install" ]; then
@@ -610,6 +639,7 @@ EOF
 }
 
 cmd_ui() {
+  adopt_unmanaged
   local ui_src="$REPO_ROOT/ui.swift"
   local ui_bin="$REPO_ROOT/.ui/ChromeToSafari"
   if [ ! -x "$ui_bin" ] || [ "$ui_src" -nt "$ui_bin" ]; then
@@ -617,6 +647,7 @@ cmd_ui() {
     mkdir -p "$REPO_ROOT/.ui"
     swiftc -O -parse-as-library "$ui_src" -o "$ui_bin"
   fi
+  rm -rf "$C2S_TMP"   # exec skips the EXIT trap
   exec env C2S_SCRIPT="$SCRIPT_PATH" "$ui_bin"
 }
 
@@ -627,9 +658,9 @@ case "${1:-}" in
   help|-h|--help)  usage ;;
   "")              usage ;;
   add)             shift; cmd_add "$@" ;;
-  list|ls)         cmd_list ;;
-  install)         shift; cmd_install "$@" ;;
-  update)          shift; cmd_update "$@" ;;
+  list|ls)         adopt_unmanaged; cmd_list ;;
+  install)         shift; adopt_unmanaged; cmd_install "$@" ;;
+  update)          shift; adopt_unmanaged; cmd_update "$@" ;;
   # legacy muscle-memory: a bare path or URL means "add this"
   *)               cmd_add "$@" ;;
 esac

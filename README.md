@@ -70,7 +70,7 @@ The app builds itself from [ui.swift](ui.swift) on first run using the Xcode too
 
 # Upstream updates for store forks — check first, then apply
 ./chrome-to-safari.sh update <slug> --check   # version delta + changed paths, touches nothing
-./chrome-to-safari.sh update <slug>           # vendors new upstream, replays your commits
+./chrome-to-safari.sh update <slug>           # vendors new upstream, merges it with your commits
 ```
 
 Typing an old-style bare path or URL without a verb is shorthand for `add`.
@@ -115,7 +115,7 @@ When the original author ships something cool:
 ./chrome-to-safari.sh update slug           # apply it
 ```
 
-`update` re-vendors the new upstream on top of the anchor and replays your commits after it. If your edit and the upstream change touch the same lines, it stops and tells you exactly how to finish in git terms (`git status` → edit → `git cherry-pick --continue` → `git checkout -B main`). Until you resolve, nothing has moved — `git cherry-pick --abort` restores the exact pre-update state.
+`update` commits the new upstream on top of the old anchor, then merges it into your branch, so your commits stay and other extensions' history is untouched. If your edit and the upstream change touch the same lines, it stops and tells you exactly how to finish in git terms (`git status` → edit → `git add -A && git commit --no-edit`). `git merge --abort` restores the exact pre-merge state.
 
 Local extensions (no upstream) simply report "nothing to update".
 
@@ -168,7 +168,7 @@ No step deletes anything you could have edited. Re-running is always safe.
 - **"No Apple Development certificate found"** — do the one-time setup above.
 - **Extension doesn't appear in Safari** — quit and reopen Safari, then check Safari → Settings → Extensions. Make sure the wrapper app ran at least once.
 - **Multiple certificates / wrong team** — pass `TEAM_ID=XXXXXXXXXX` explicitly. Find yours with `security find-identity -v -p codesigning`.
-- **Update stopped on a conflict** — that's the system working. Follow the printed steps: resolve, `git cherry-pick --continue`, then `git checkout -B main`.
+- **Update stopped on a conflict** — that's the system working. Follow the printed steps: resolve, then `git add -A && git commit --no-edit` (or `git merge --abort`).
 
 ## Privacy & Terms
 
