@@ -43,8 +43,8 @@ have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 usage() { sed -n '2,27p' "$0"; }
 
-clean_app_name() { # the name ends up in filesystem paths under /Applications
-  printf '%s' "$1" | tr '/' '-' | sed 's/^\.*//'
+clean_app_name() { # the name ends up in file paths and Xcode dependency files: no '/' or ':'
+  printf '%s' "$1" | tr '/:' '--' | sed 's/^\.*//'
 }
 
 slugify() {
@@ -230,7 +230,7 @@ build_and_install_one() { # <slug> [--no-launch]
   app_name="$(json_field "$dir/meta.json" app_name)"
   bundle_id="$(json_field "$dir/meta.json" bundle_id)"
   [ -n "$app_name" ] || die "extensions/$slug/meta.json has no app_name"
-  case "$app_name" in */*|.*) die "extensions/$slug/meta.json: app_name must not contain '/' or start with '.'" ;; esac
+  [ "$app_name" = "$(clean_app_name "$app_name")" ] || die "extensions/$slug/meta.json: app_name must not contain '/' or ':' or start with '.' (try: $(clean_app_name "$app_name"))"
 
   require_team_id
   echo "==> App name:  $app_name"
@@ -262,7 +262,7 @@ build_and_install_one() { # <slug> [--no-launch]
   log_file="$C2S_TMP/build-$slug.log"
 
   info "Building..."
-  # judge success by the product existing, not by grep's exit code
+  # judge success by the log, not by grep's exit code
   set +e
   xcodebuild \
       -project "$project" \
@@ -276,7 +276,7 @@ build_and_install_one() { # <slug> [--no-launch]
   set -e
 
   local app="$build_dir/Build/Products/Release/$app_name.app"
-  if [ ! -d "$app" ]; then
+  if [ ! -d "$app" ] || ! grep -q "BUILD SUCCEEDED" "$log_file"; then
     echo "" >&2
     echo "ERROR: build failed. Last 40 lines of full output:" >&2
     tail -40 "$log_file" >&2
