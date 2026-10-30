@@ -2,3 +2,6 @@
 .ui/
 # generated Xcode projects are disposable: regenerated from src/ + safari/ on every install
 extensions/*/project/
+
+# extension sources are local to each machine
+extensions/*
